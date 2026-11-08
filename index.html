@@ -23524,19 +23524,25 @@ function excelColumnIndex(label) {
   return n - 1;
 }
 
+function parseCoordinateInput(value) {
+  const text=String(value??'').trim().replace(/\s+/g,'').replace(',','.');
+  if(!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text))throw Error('Vnesi veljavno število; decimalke lahko ločiš z vejico ali piko.');
+  const n=Number(text);if(!Number.isFinite(n)||Math.abs(n)>100000)throw Error('Koordinata mora biti znotraj 100000 m od izhodišča.');return n;
+}
+function formatCoordinateInput(value) { const n=Number(Number(value).toFixed(6));return String(Object.is(n,-0)?0:n).replace('.',',') }
 function parseGridReference(value, origin) {
-  const match = String(value || '').trim().match(/^([−-]?[A-Z]+)\s*([+-]?\d+)$/i);
-  if (!match) throw Error('Vnesi oznako mrežne točke, na primer B5 ali A-1.');
+  const match = String(value || '').trim().match(/^([−-]?[A-Z]+)\s*([+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+))$/i);
+  if (!match) throw Error('Vnesi točko, na primer B5, A-1 ali A-1,5. Za decimalni X uporabi način Koordinate.');
   const rawColumn = match[1], negativeColumn = /^[−-]/.test(rawColumn);
-  const column = (excelColumnIndex(rawColumn.replace(/^[−-]/, '')) + (negativeColumn ? 1 : 0)) * (negativeColumn ? -1 : 1), row = Number(match[2]);
-  if (Math.abs(column) > 100000 || !Number.isSafeInteger(row) || Math.abs(row) > 100000) throw Error('Mrežna točka mora biti znotraj 100000 m od izhodišča.');
+  const column = (excelColumnIndex(rawColumn.replace(/^[−-]/, '')) + (negativeColumn ? 1 : 0)) * (negativeColumn ? -1 : 1), row = parseCoordinateInput(match[2]);
+  if (Math.abs(column) > 100000) throw Error('Mrežna točka mora biti znotraj 100000 m od izhodišča.');
   return [origin[0] + column, origin[1] - row];
 }
 
 function gridReferenceFor(point, origin) {
   const column = Math.round(point[0] - origin[0]);
-  const row = -Math.round(point[1] - origin[1]);
-  return (column < 0 ? '−' : '') + excelColumn(Math.abs(column)-(column<0?1:0)) + row;
+  const row = -Number((point[1] - origin[1]).toFixed(4));
+  return (column < 0 ? '−' : '') + excelColumn(Math.abs(column)-(column<0?1:0)) + formatCoordinateInput(row);
 }
 
 function adjustSketchDialogForKeyboard(ensureFocusedField=false) {
@@ -23559,10 +23565,10 @@ function sheet() {
   const coordEnd = [d.a[0] + Math.cos(d.ang * Math.PI / 180) * d.len, d.a[1] + Math.sin(d.ang * Math.PI / 180) * d.len];
   const coordOrigin = Array.isArray(P().gridOrigin) ? P().gridOrigin : gridOriginFor([{a:d.a,b:coordEnd}]) || [0,0];
   const startRef = gridReferenceFor(d.a, coordOrigin), endRef = gridReferenceFor(coordEnd, coordOrigin);
-  const startPoint = parseGridReference(startRef, coordOrigin), endPoint = parseGridReference(endRef, coordOrigin);
+  const startPoint = [...d.a], endPoint = coordEnd, gridXAligned = [startPoint[0],endPoint[0]].every(x=>Math.abs((x-coordOrigin[0])-Math.round(x-coordOrigin[0]))<1e-6);
   const gapManual = hasManualPostSpacings({a:d.a,b:coordEnd,postSpacings:d.postSpacings});
   const gapsText = (gapManual ? d.postSpacings : autoPostSpacings(d.len, defaultPostSpacing())).map(fmt).join('; ');
-  const row = (label,id,value,step) => `<label class="row"><span>${label}</span><input id="${id}" type="number" step="${step}" value="${value}"></label>`;
+  const row = (label,id,value,step) => `<label class="row"><span>${label}</span><input id="${id}" type="number" step="${step}" value="${value}"></label>`, coordRow=(label,id,value)=>`<label class="row"><span>${label}</span><input id="${id}" type="text" inputmode="decimal" value="${formatCoordinateInput(value)}"></label>`;
 
   ['position','inset','left','right','top','bottom','width','maxWidth','margin','maxHeight','overflowY','overscrollBehavior','borderRadius','paddingBottom'].forEach(k=>sh.style[k]='');
   const mobile = matchMedia('(max-width: 600px)').matches;
@@ -23573,9 +23579,9 @@ function sheet() {
     <label class="row" id="sgh" ${d.kind==='gate'&&d.gateType!=='double'?'':'hidden'}><span>Krilo / tečaji</span><select id="sh"><option value="left" ${d.gateHand==='left'?'selected':''}>Levo krilo · tečaji na začetku odseka</option><option value="right" ${d.gateHand==='right'?'selected':''}>Desno krilo · tečaji na koncu odseka</option></select></label>
     <label class="row" id="sgo" ${d.kind==='gate'?'':'hidden'}><span>Smer odpiranja</span><select id="so"><option value="left" ${d.gateOpenSide==='left'?'selected':''}>Levo glede na smer risanja</option><option value="right" ${d.gateOpenSide==='right'?'selected':''}>Desno glede na smer risanja</option></select></label>
     <label class="row col" id="spr" ${d.kind==='fence'?'':'hidden'}><span>Dolžine med stebri (m; loči s podpičjem)</span><input id="sp" value="${esc(gapsText)}"><small>Predlog sledi širini panela. Spremeni posamezne razmike, če je treba.</small></label>
-    <label class="row"><span>Način vnosa točk</span><select id="coord-mode"><option value="grid">Mrežna polja, na primer B5 do B7</option><option value="xy">Koordinate v metrih (X/Y)</option><option value="draw">Označena točka, dolžina in smer</option></select></label>
-     <div id="coord-grid-fields" class="coord-fields"><div class="note" style="margin:8px 4px;font-size:13px">Vnesi mrežno točko, na primer <b>B5</b>. Izhodišče je prva izbrana točka (A1 oziroma (0,0)); desno so črke pozitivne, navzdol pa številke naraščajo. Razdalja med sosednjimi točkami je 1 m.</div><div class="coord-inputs"><label class="row"><span>Začetek · točka</span><input id="sra" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" placeholder="B5" value="${startRef}"></label><label class="row"><span>Konec · točka</span><input id="srb" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" placeholder="B7" value="${endRef}"></label></div></div>
-     <div id="coord-xy-fields" class="coord-fields" hidden><div class="note" style="margin:8px 4px;font-size:13px">Koordinate se merijo od prve izbrane točke. X narašča v desno, Y navzgor in je navzdol negativen. Vrednosti so v metrih.</div><div class="coord-inputs">${row('Začetek X (m)','sx',startPoint[0]-coordOrigin[0],'any')}${row('Začetek Y (m)','sy',coordOrigin[1]-startPoint[1],'any')}${row('Konec X (m)','ex',endPoint[0]-coordOrigin[0],'any')}${row('Konec Y (m)','ey',coordOrigin[1]-endPoint[1],'any')}</div></div>
+    <label class="row"><span>Način vnosa točk</span><select id="coord-mode"><option value="grid" ${gridXAligned?'selected':''}>Mrežne točke, na primer A-1,5</option><option value="xy" ${gridXAligned?'':'selected'}>Koordinate v metrih (X/Y)</option><option value="draw">Označena točka, dolžina in smer</option></select></label>
+     <div id="coord-grid-fields" class="coord-fields"><div class="note" style="margin:8px 4px;font-size:13px">A0 je referenčna točka. Vrstice nad njo so pozitivne, pod njo negativne; <b>A-1,5</b> pomeni 1,5 m navzdol. Za decimalni X uporabi način Koordinate. En korak mreže je 1 m.</div><div class="coord-inputs"><label class="row"><span>Začetek · točka</span><input id="sra" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" placeholder="A-1,5" value="${startRef}"></label><label class="row"><span>Konec · točka</span><input id="srb" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" placeholder="A2" value="${endRef}"></label></div></div>
+     <div id="coord-xy-fields" class="coord-fields" hidden><div class="note" style="margin:8px 4px;font-size:13px">Koordinate se merijo od A0: X narašča v desno, Y navzgor in je navzdol negativen. Vrednosti so v metrih.</div><div class="coord-inputs">${coordRow('Začetek X (m)','sx',startPoint[0]-coordOrigin[0])}${coordRow('Začetek Y (m)','sy',coordOrigin[1]-startPoint[1])}${coordRow('Konec X (m)','ex',endPoint[0]-coordOrigin[0])}${coordRow('Konec Y (m)','ey',coordOrigin[1]-endPoint[1])}</div></div>
     <div id="coord-draw-hint" class="note" style="margin:8px 4px;font-size:13px" hidden>Uporabi točko, ki si jo označil na skici, ter spodaj določi dolžino in smer odseka.</div>
     ${row('Dolžina (m)','sl',d.len,.01)}${row('Smer (°)','sa',d.ang,1)}${row('Nivo (cm)','sv',d.level,1)}</div>
     <p class="gf">Črtkani lok na skici prikazuje smer odpiranja. Pri enokrilnih vratih izberi stran tečajev.</p><button class="btn p" type="submit">${isNew?'Dodaj odsek':'Shrani'}</button>${isNew?'':'<button class="btn d" type="button" id="sdel">Izbriši odsek</button>'}<button class="btn" type="button" id="scan">Prekliči</button></form>`;
@@ -23589,8 +23595,8 @@ function sheet() {
   const syncDerived = () => {
     let a,b;
     try {
-      if (mode.value === 'grid') { a=parseGridReference($('sra').value,coordOrigin); b=parseGridReference($('srb').value,coordOrigin); $('sx').value=a[0]-coordOrigin[0]; $('sy').value=coordOrigin[1]-a[1]; $('ex').value=b[0]-coordOrigin[0]; $('ey').value=coordOrigin[1]-b[1]; }
-      else if (mode.value === 'xy') { const c=coordIds.map(id=>$(id).valueAsNumber); if(c.some(n=>!Number.isFinite(n)))return; a=[c[0]+coordOrigin[0],coordOrigin[1]-c[1]]; b=[c[2]+coordOrigin[0],coordOrigin[1]-c[3]]; $('sra').value=gridReferenceFor(a,coordOrigin); $('srb').value=gridReferenceFor(b,coordOrigin); }
+      if (mode.value === 'grid') { a=parseGridReference($('sra').value,coordOrigin); b=parseGridReference($('srb').value,coordOrigin); $('sx').value=formatCoordinateInput(a[0]-coordOrigin[0]); $('sy').value=formatCoordinateInput(coordOrigin[1]-a[1]); $('ex').value=formatCoordinateInput(b[0]-coordOrigin[0]); $('ey').value=formatCoordinateInput(coordOrigin[1]-b[1]); }
+      else if (mode.value === 'xy') { let c;try{c=coordIds.map(id=>parseCoordinateInput($(id).value))}catch{return} a=[c[0]+coordOrigin[0],coordOrigin[1]-c[1]]; b=[c[2]+coordOrigin[0],coordOrigin[1]-c[3]]; $('sra').value=gridReferenceFor(a,coordOrigin); $('srb').value=gridReferenceFor(b,coordOrigin); }
       else return;
     } catch(e) { return; }
     const dx=b[0]-a[0],dy=b[1]-a[1],distance=Math.hypot(dx,dy); if(distance<.01)return;
@@ -23606,7 +23612,7 @@ function sheet() {
   sh.onfocusin=()=>setTimeout(()=>adjustSketchDialogForKeyboard(true),120);
   $('sf').onsubmit=e=>{
     e.preventDefault(); const modeValue=mode.value,exact=modeValue!=='draw'; let coordA=d.a,coordB=null;
-    if(exact){try{if(modeValue==='grid'){coordA=parseGridReference($('sra').value,coordOrigin);coordB=parseGridReference($('srb').value,coordOrigin)}else{const c=coordIds.map(id=>$(id).valueAsNumber);if(c.some(n=>!Number.isFinite(n)||Math.abs(n)>100000)){toast('Vnesi veljavne koordinate v metrih.');return}coordA=[c[0]+coordOrigin[0],coordOrigin[1]+c[1]];coordB=[c[2]+coordOrigin[0],coordOrigin[1]+c[3]]}}catch(err){toast(err.message);return}}
+    if(exact){try{if(modeValue==='grid'){coordA=parseGridReference($('sra').value,coordOrigin);coordB=parseGridReference($('srb').value,coordOrigin)}else{let c;try{c=coordIds.map(id=>parseCoordinateInput($(id).value))}catch(err){toast(err.message);return}coordA=[c[0]+coordOrigin[0],coordOrigin[1]-c[1]];coordB=[c[2]+coordOrigin[0],coordOrigin[1]-c[3]]}}catch(err){toast(err.message);return}}
     const dx=coordB?coordB[0]-coordA[0]:0,dy=coordB?coordB[1]-coordA[1]:0,l=exact?Math.hypot(dx,dy):N($('sl').value),angle=exact?Math.atan2(dy,dx):N($('sa').value)*Math.PI/180;
     if(l<.01||l>10000){toast('Preveri dolžino.');return} const kind=$('sk').value; let postSpacings;
     if(kind==='fence'){const gaps=$('sp').value.split(';').map(x=>Number(x.trim().replace(',','.')));if(!gaps.length||gaps.some(x=>!Number.isFinite(x)||x<=.05||x>defaultPostSpacing()+.02)||Math.abs(gaps.reduce((n,x)=>n+x,0)-l)>.04){toast('Razmik med stebri ne sme presegati širine panela, razmiki pa morajo skupaj pokriti celoten odsek.');return}if(gapManual){postSpacings=[...gaps];postSpacings[postSpacings.length-1]=+(l-postSpacings.slice(0,-1).reduce((n,x)=>n+x,0)).toFixed(3)}}
